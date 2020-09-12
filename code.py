@@ -77,8 +77,7 @@ AQI_COLORS = {
     'Unhealthy1' : 0xFFA500,
     'Unhealthy2' : 0xFF0000,
     'Unhealthy3' : 0xFF0000,
-    'Hazardous' : 0xFF00FF,
-    'Error' : 0xFF0000
+    'Hazardous' : 0xFF00FF
 }
 
 def pm25_to_air_quality(pm25_value):
@@ -223,8 +222,14 @@ while True:
                % (pm25_env, length, str(pm25_average)))
 
     aqi = pm25_to_aqi(pm25_average)
-    aqi_text = ("AQI: %d" % (aqi))
-    aqi_color = AQI_COLORS[aqi_to_air_quality(aqi)]
+
+    if aqi == "Error":
+        aqi_text = "AQI: Error"
+        aqi_color = 0xFF0000
+    else:
+        aqi_text = "AQI: %d" % aqi
+        aqi_color = AQI_COLORS[aqi_to_air_quality(aqi)]
+
     gc.collect()
 
     text_area = label.Label(terminalio.FONT, text=aqi_text, color=aqi_color)

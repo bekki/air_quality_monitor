@@ -13,7 +13,7 @@ import gc
 import time
 import board
 import busio
-import adafruit_sgp30
+#import adafruit_sgp30
 import displayio
 import terminalio
 from adafruit_display_text import label
@@ -28,10 +28,10 @@ tft_cs = board.D9
 tft_dc = board.D10
 
 # SGP30 setup
-i2c = busio.I2C(board.SCL, board.SDA, frequency=100000)
-sgp30 = adafruit_sgp30.Adafruit_SGP30(i2c)
-sgp30.iaq_init()
-sgp30.set_iaq_baseline(0x8973, 0x8aae)
+#i2c = busio.I2C(board.SCL, board.SDA, frequency=100000)
+#sgp30 = adafruit_sgp30.Adafruit_SGP30(i2c)
+#sgp30.iaq_init()
+#sgp30.set_iaq_baseline(0x8973, 0x8aae)
 
 # PM2.5 sensor setup
 uart = busio.UART(board.TX, board.RX, baudrate=9600)
@@ -44,31 +44,86 @@ display.show(splash)
 
 ###########################################################
 
-READ_FREQUENCY = 1
-OUTPUT_FREQUENCY = 5
-LOGGING = True
+READ_FREQUENCY = 15
+LOGGING = False
 read_checkpoint = int(time.monotonic())
-output_checkpoint = int(time.monotonic())
 init_pass = True
 buffer = []
 pm25_buffer = []
-pm25_average = "Calculating..."
+
+############ AQI Calculation ################
+
+CONCENTRATION_RANGE_LOW_HIGH = {
+    'Good' : [0.0, 12.0],
+    'Moderate' : [12.1, 35.4],
+    'Unhealthy1' : [35.5, 55.4],
+    'Unhealthy2' : [55.5, 150.4],
+    'Unhealthy3' : [150.5, 250.4],
+    'Hazardous' : [250.5, 500.4]
+}
+
+AQI_RANGE_LOW_HIGH = {
+    'Good' : [0, 50],
+    'Moderate' : [51, 100],
+    'Unhealthy1' : [101, 150],
+    'Unhealthy2' : [151, 200],
+    'Unhealthy3' : [201, 300],
+    'Hazardous' : [301, 500]
+}
+
+AQI_COLORS = {
+    'Good' : 0x00FF00,
+    'Moderate' : 0xFFFF00,
+    'Unhealthy1' : 0xFFA500,
+    'Unhealthy2' : 0xFF0000,
+    'Unhealthy3' : 0xFF0000,
+    'Hazardous' : 0xFF00FF,
+    'Error' : 0xFF0000
+}
+
+def pm25_to_air_quality(pm25_value):
+    for range in CONCENTRATION_RANGE_LOW_HIGH:
+        low_high = CONCENTRATION_RANGE_LOW_HIGH[range]
+        if pm25_value >= low_high[0] and pm25_value <= low_high[1]:
+            return range
+    return "Error"
+
+def aqi_to_air_quality(aqi_value):
+    for range in AQI_RANGE_LOW_HIGH:
+        low_high = AQI_RANGE_LOW_HIGH[range]
+        if aqi_value >= low_high[0] and aqi_value <= low_high[1]:
+            return range
+    return "Error"
+
+def pm25_to_aqi(pm25_value):
+    air_quality = pm25_to_air_quality(pm25_value)
+    if air_quality == "Error":
+        return air_quality
+
+    return (((AQI_RANGE_LOW_HIGH[air_quality][1]-AQI_RANGE_LOW_HIGH[air_quality][0])
+             /(CONCENTRATION_RANGE_LOW_HIGH[air_quality][1] - CONCENTRATION_RANGE_LOW_HIGH[air_quality][0])
+             *(pm25_value - CONCENTRATION_RANGE_LOW_HIGH[air_quality][0]))
+            + AQI_RANGE_LOW_HIGH[air_quality][0])
+
+###########################################
 
 def seconds_elapsed_since(checkpoint):
     return int(time.monotonic()) - checkpoint
 
+pm25_buffer_capacity = False
+
 while True:
-
     # only get readings every READ_FREQUENCY secs
-    if seconds_elapsed_since(read_checkpoint) >= READ_FREQUENCY:
-      read_checkpoint = int(time.monotonic())
-    else:
-      continue
+    if not init_pass:
+        if seconds_elapsed_since(read_checkpoint) >= READ_FREQUENCY:
+          read_checkpoint = int(time.monotonic())
+        else:
+          continue
 
-    if LOGGING:
-        print("eCO2 = %d ppm \t TVOC = %d ppb" % (sgp30.eCO2, sgp30.TVOC))
-        print("**** Baseline values: eCO2 = 0x%x, TVOC = 0x%x"
-              % (sgp30.baseline_eCO2, sgp30.baseline_TVOC))
+#    if LOGGING:
+#        print("eCO2 = %d ppm \t TVOC = %d ppb" % (sgp30.eCO2, sgp30.TVOC))
+#        print("**** Baseline values: eCO2 = 0x%x, TVOC = 0x%x"
+#              % (sgp30.baseline_eCO2, sgp30.baseline_TVOC))
 
     data = uart.read(32)  # read up to 32 bytes
     data = list(data)
@@ -79,6 +134,7 @@ while True:
 
     if len(buffer) > 200:
         buffer = []  # avoid an overrun if all bad data
+        gc.collect()
     if len(buffer) < 32:
         continue
 
@@ -89,6 +145,7 @@ while True:
     frame_len = struct.unpack(">H", bytes(buffer[2:4]))[0]
     if frame_len != 28:
         buffer = []
+        gc.collect()
         continue
 
     try:
@@ -98,6 +155,7 @@ while True:
     except RuntimeError:
         print("buffer overfilled, flushed")
         buffer = []
+        gc.collect()
         continue
 
     pm10_standard, pm25_standard, pm100_standard, pm10_env, \
@@ -108,6 +166,7 @@ while True:
 
     if check != checksum:
         buffer = []
+        gc.collect()
         continue
 
     if LOGGING:
@@ -131,36 +190,44 @@ while True:
 
     pm25_buffer.append(pm25_env)
     length = len(pm25_buffer)
-    if length > 30:
-        pm25_buffer.pop(0)
-    elif length < 30:
-        pm25_average = "Calculating..."
-    else:
-        pm25_average = 0
-        for value in pm25_buffer:
-            pm25_average += value
-        pm25_average = pm25_average/30
 
-    # only refresh output every OUTPUT_FREQUENCY secs
-    if seconds_elapsed_since(output_checkpoint) >= OUTPUT_FREQUENCY:
-      output_checkpoint = int(time.monotonic())
-    else:
-      continue
+    if length == 20:
+        pm25_buffer.pop(0)
+        pm25_buffer_capacity = True
+
+    pm25_average = 0
+    for value in pm25_buffer:
+        pm25_average += value
+    pm25_average = pm25_average/length
 
     if init_pass:
-      text_group = displayio.Group(max_size=10, scale=3, x=40, y=120)
+      text_group1 = displayio.Group(max_size=10, scale=5, x=20, y=40)
+      text_group2 = displayio.Group(max_size=5, scale=2, x=20, y=160)
+      splash.append(text_group1)
+      splash.append(text_group2)
       init_pass = False
     else: # dealloc old UI elements before drawing new ones
-      text_group.pop(0)
-      splash.pop(0)
+      text_group1.pop()
+      text_group2.pop()
       text_area = 0
       gc.collect()
 
 #    text = ("PM2.5: %d\neCO2: %d ppm\nTVOC: %d ppb"
 #            % (pm25_env, sgp30.eCO2, sgp30.TVOC))
-    text = ("PM2.5: %d\n\n30 sec average:\n%s"
-            % (pm25_env, str(pm25_average)))
 
-    text_area = label.Label(terminalio.FONT, text=text, color=0xFFFF00)
-    text_group.append(text_area) # Subgroup for text scaling
-    splash.append(text_group)
+    if pm25_buffer_capacity:
+       pm_text = ("PM2.5: %d ug/m3\n5 min average:\n%s ug/m3"
+               % (pm25_env, str(pm25_average)))
+    else:
+       pm_text = ("PM2.5: %d ug/m3\naverage of %d samples:\n%s ug/m3"
+               % (pm25_env, length, str(pm25_average)))
+
+    aqi = pm25_to_aqi(pm25_average)
+    aqi_text = ("AQI: %d" % (aqi))
+    aqi_color = AQI_COLORS[aqi_to_air_quality(aqi)]
+    gc.collect()
+
+    text_area = label.Label(terminalio.FONT, text=aqi_text, color=aqi_color)
+    text_group1.append(text_area)
+    text_area = label.Label(terminalio.FONT, text=pm_text, color=0xFFFFFF)
+    text_group2.append(text_area)

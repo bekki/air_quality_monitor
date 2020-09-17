@@ -1,8 +1,6 @@
-# Home air quality project using components:
-# * Adafruit Metro Express
-# * PM2.5 Air Quality Sensor
-# * Adafruit SGP30 Air Quality Sensor - VOC and eCO2
-# * 3.2" TFT LCD with Touchscreen Breakout Board w/MicroSD Socket
+# Air quality monitor <3
+# Displays AQI values based on PM2.5 (up to the last 5 minutes of readings)
+# TODO: add wifi capability and upload data for graphs, IFTTT, etc; support readings for co2, voc, temperature, and humidity.
 
 try:
     import struct
